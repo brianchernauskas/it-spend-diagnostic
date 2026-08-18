@@ -108,7 +108,8 @@ const PLANNERS = {
 };
 
 const CATEGORIES = ['Cloud / IaaS', 'Software / SaaS', 'Security', 'Observability', 'Data / Analytics',
-  'Network / Hardware', 'Hardware', 'Telecom', 'IT Services', 'Managed Services', 'Reseller / Channel', 'Unclassified'];
+  'Network / Hardware', 'Hardware', 'Telecom', 'IT Services', 'Managed Services', 'Staffing / Contingent',
+  'Print / Output', 'Reseller / Channel', 'Non-IT / Review scope', 'Unclassified'];
 
 // Category-typical negotiation ranges, applied only when the toggle is on.
 // These are Proxima assumptions for pre-diligence sizing, NOT modelled outcomes.
@@ -117,7 +118,10 @@ const SAVINGS_RANGES = {
   'Cloud / IaaS': [10, 25], 'Software / SaaS': [8, 20], 'Security': [8, 18],
   'Observability': [10, 25], 'Data / Analytics': [10, 22], 'Network / Hardware': [8, 18],
   'Hardware': [5, 15], 'Telecom': [10, 30], 'IT Services': [5, 15],
-  'Managed Services': [5, 15], 'Reseller / Channel': [3, 10], 'Unclassified': null,
+  'Managed Services': [5, 15], 'Staffing / Contingent': [5, 15], 'Print / Output': [10, 25],
+  'Reseller / Channel': [3, 10],
+  'Non-IT / Review scope': null,   // out of IT scope — excluded from sizing on purpose
+  'Unclassified': null,
 };
 
 // Maps a free-text category value from the file onto the taxonomy.
@@ -142,7 +146,87 @@ const CATEGORY_SYNONYMS = {
   'support': 'Managed Services', 'maintenance': 'Managed Services',
   'reseller': 'Reseller / Channel', 'channel': 'Reseller / Channel', 'var': 'Reseller / Channel',
   'distributor': 'Reseller / Channel',
+  'staffing': 'Staffing / Contingent', 'contingent': 'Staffing / Contingent', 'temp labour': 'Staffing / Contingent',
+  'print': 'Print / Output', 'printing': 'Print / Output', 'reprographics': 'Print / Output',
+  'facilities': 'Non-IT / Review scope', 'travel': 'Non-IT / Review scope', 'legal': 'Non-IT / Review scope',
+  'insurance': 'Non-IT / Review scope', 'marketing': 'Non-IT / Review scope', 'utilities': 'Non-IT / Review scope',
 };
+
+// ─── Name-based classification ───────────────────────────────────────────────
+// Most supplier names describe what the supplier does. The dictionary only knows
+// vendors it has been told about, so without this the entire long tail lands in
+// Unclassified even when the name says exactly what it is. Weaker evidence than
+// an exact vendor match, so it sits below the dictionary in the chain and is
+// labelled distinctly — the analyst can see it was inferred from a word.
+// Ordered most-specific first; the first hit wins.
+const NAME_KEYWORDS = [
+  ['Non-IT / Review scope', ['facilities', 'facility', 'catering', 'cleaning', 'janitorial', 'travel',
+    'legal', 'insurance', 'advertising', 'marketing', 'real estate', 'property', 'logistics', 'freight',
+    'courier', 'utilities', 'energy', 'payroll', 'pension', 'recruitment agency']],
+  ['Staffing / Contingent', ['staffing', 'staff aug', 'recruit', 'recruiting', 'recruitment', 'contractor',
+    'contractors', 'contracting', 'talent', 'resourcing', 'interim', 'temp']],
+  ['Print / Output', ['print', 'printing', 'printers', 'reprographics', 'copier', 'imaging', 'document solutions']],
+  ['Observability', ['monitoring', 'observability', 'telemetry', 'logging', 'apm', 'uptime']],
+  ['Security', ['security', 'cyber', 'infosec', 'firewall', 'threat', 'siem', 'soc ', 'identity',
+    'penetration', 'pentest', 'endpoint protection', 'antivirus']],
+  ['Telecom', ['telecom', 'telecoms', 'telco', 'wireless', 'mobile', 'voice', 'broadband', 'connectivity',
+    'communications', 'comms', 'satellite', 'fibre', 'fiber']],
+  ['Network / Hardware', ['network', 'networks', 'networking', 'cdn', 'bandwidth', 'routing', 'lan', 'wan']],
+  ['Data / Analytics', ['data', 'analytics', 'insights', 'warehouse', 'database', 'reporting']],
+  ['Cloud / IaaS', ['cloud', 'hosting', 'datacenter', 'data centre', 'data center', 'colocation', 'colo ']],
+  ['Hardware', ['hardware', 'equipment', 'devices', 'servers', 'storage', 'peripherals', 'laptops']],
+  ['Managed Services', ['managed', 'msp', 'outsourc', 'helpdesk', 'help desk', 'service desk', 'support',
+    'maintenance', 'break-fix', 'break fix']],
+  ['Reseller / Channel', ['reseller', 'distribution', 'distributor', 'supplies', 'procurement']],
+  ['IT Services', ['consulting', 'consultancy', 'consultants', 'advisory', 'integration', 'integrator',
+    'implementation', 'transformation', 'digital', 'professional services', 'engineering', 'development',
+    'partners', 'associates']],
+  ['Software / SaaS', ['software', 'saas', 'platform', 'application', 'applications', 'licensing', 'subscription']],
+];
+
+// Returns { category, keyword } or null.
+function classifyByName(name) {
+  const hay = ' ' + String(name).toLowerCase().replace(/[.,/()]/g, ' ').replace(/\s+/g, ' ') + ' ';
+  for (const [category, tokens] of NAME_KEYWORDS) {
+    for (const t of tokens) {
+      const needle = t.trim();
+      // Bounded on both sides, allowing a short inflection (network/networks,
+      // print/printing). Without the trailing bound, "cyber" matched the company
+      // name "Cyberdyne" and filed a support vendor under Security.
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\w{0,3}\\b', 'i');
+      if (re.test(hay)) return { category, keyword: needle };
+    }
+  }
+  return null;
+}
+
+// Analyst-supplied rules, parsed from "keyword = Category" lines. Beats the
+// built-in keyword list because the analyst knows the estate; kept in memory
+// only, and exportable as text so it can be reused without persisting anything.
+function parseCustomRules(text) {
+  const rules = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const m = t.split(/\s*=\s*/);
+    if (m.length !== 2) continue;
+    const keyword = m[0].trim().toLowerCase();
+    const wanted = m[1].trim().toLowerCase();
+    const category = CATEGORIES.find(c => c.toLowerCase() === wanted)
+      || CATEGORIES.find(c => c.toLowerCase().startsWith(wanted))
+      || resolveCategory(wanted);
+    if (keyword && category) rules.push({ keyword, category });
+  }
+  return rules;
+}
+
+function classifyByCustomRules(name, rules) {
+  const hay = ' ' + String(name).toLowerCase().replace(/[.,/()]/g, ' ').replace(/\s+/g, ' ') + ' ';
+  for (const r of rules) {
+    if (hay.includes(r.keyword)) return { category: r.category, keyword: r.keyword };
+  }
+  return null;
+}
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 function detectDelimiter(text) {
@@ -264,10 +348,14 @@ function buildSuppliers() {
     const vendor = matchVendor(rawName);
     const key = vendor ? 'v:' + vendor.canonical : 'k:' + normalisationKey(rawName);
     if (!groups.has(key)) {
+      const custom = vendor ? null : classifyByCustomRules(rawName, state.customRules || []);
+      const byName = vendor ? null : classifyByName(rawName);
       groups.set(key, {
         canonical: vendor ? vendor.canonical : stripLegalSuffixes(rawName) || rawName,
         variants: new Set(), prior: 0, current: 0,
         fileCategories: new Set(), dictCategory: vendor ? vendor.category : null,
+        customCategory: custom ? custom.category : null, customKeyword: custom ? custom.keyword : null,
+        nameCategory: byName ? byName.category : null, nameKeyword: byName ? byName.keyword : null,
         planner: vendor ? vendor.planner : null, matched: !!vendor,
       });
     }
@@ -282,7 +370,7 @@ function buildSuppliers() {
 
   const suppliers = [...groups.values()].map(g => {
     const fileCats = [...g.fileCategories];
-    let category, source;
+    let category, source, why = '';
     if (state.overrides[g.canonical]) {
       category = state.overrides[g.canonical]; source = 'override';
     } else if (fileCats.length === 1) {
@@ -294,6 +382,13 @@ function buildSuppliers() {
       category = fileCats[0]; source = 'conflict';
     } else if (g.dictCategory) {
       category = g.dictCategory; source = 'inferred';
+      why = 'known vendor';
+    } else if (g.customCategory) {
+      category = g.customCategory; source = 'custom';
+      why = `your rule "${g.customKeyword}"`;
+    } else if (g.nameCategory) {
+      category = g.nameCategory; source = 'keyword';
+      why = `name contains "${g.nameKeyword}"`;
     } else {
       category = 'Unclassified'; source = 'none';
     }
@@ -303,8 +398,9 @@ function buildSuppliers() {
       variants: [...g.variants],
       prior: g.prior, current: g.current, delta,
       deltaPct: g.prior > 0 ? (delta / g.prior) * 100 : (g.current > 0 ? Infinity : 0),
-      category, categorySource: source,
+      category, categorySource: source, categoryWhy: why,
       dictCategory: g.dictCategory, fileCategories: fileCats,
+      nameCategory: g.nameCategory, nameKeyword: g.nameKeyword,
       planner: g.planner, matched: g.matched,
       status: g.prior === 0 ? 'new' : (g.current === 0 ? 'gone' : 'active'),
     };
@@ -480,6 +576,7 @@ function renderReconcile() {
     prior: document.getElementById('label-prior').value.trim() || 'Prior',
     current: document.getElementById('label-current').value.trim() || 'Current',
   };
+  state.customRules = parseCustomRules(document.getElementById('custom-rules')?.value);
   if (state.map.prior < 0 && state.map.current < 0) {
     document.getElementById('reconcile-output').innerHTML =
       `<div class="alert alert-danger"><span class="alert-icon">⚠️</span><div>At least one spend column is required. Go back and map one.</div></div>`;
@@ -492,12 +589,36 @@ function renderReconcile() {
   const unclassified = s.filter(x => x.category === 'Unclassified');
   const bySource = src => s.filter(x => x.categorySource === src).length;
 
+  const classified = s.length - unclassified.length;
   let html = `<div class="tiles">
     <div class="tile"><div class="tile-label">Suppliers</div><div class="tile-value">${s.length}</div><div class="tile-note">from ${state.rows.length} rows</div></div>
+    <div class="tile"><div class="tile-label">Classified</div><div class="tile-value">${s.length ? Math.round(classified / s.length * 100) : 0}%</div><div class="tile-note">${bySource('file')} file · ${bySource('inferred')} vendor · ${bySource('custom')} your rules · ${bySource('keyword')} name</div></div>
     <div class="tile"><div class="tile-label">Name variants merged</div><div class="tile-value">${merged.length}</div><div class="tile-note">${merged.reduce((a, x) => a + x.variants.length, 0)} rows collapsed</div></div>
-    <div class="tile"><div class="tile-label">Category from file</div><div class="tile-value">${bySource('file')}</div><div class="tile-note">used as given</div></div>
     <div class="tile"><div class="tile-label">Needs attention</div><div class="tile-value">${conflicts.length + unclassified.length}</div><div class="tile-note">${conflicts.length} conflict, ${unclassified.length} unclassified</div></div>
   </div>`;
+
+  const byKeyword = s.filter(x => x.categorySource === 'keyword');
+  if (byKeyword.length) {
+    html += `<div class="section"><div class="section-head"><h3>Classified from the supplier name</h3><span class="badge">${byKeyword.length}</span></div>
+      <p class="field-hint" style="margin-bottom:11px;">These had no category in the file and are not known vendors, so the category was inferred from a word in the name. That is weaker evidence than a vendor match — scan them, and correct anything the word misled.</p>
+      <div class="table-wrap"><table><thead><tr><th>Supplier</th><th>Matched on</th><th>Category</th><th class="num">${esc(state.labels.current)}</th><th></th></tr></thead>
+      <tbody>${byKeyword.slice(0, 30).map(x => `<tr>
+        <td class="supplier-name">${esc(x.canonical)}</td>
+        <td class="variant-note">"${esc(x.nameKeyword)}"</td>
+        <td>${esc(x.category)}</td>
+        <td class="num">${fmtMoney(x.current)}</td>
+        <td><select class="cat-override" data-supplier="${esc(x.canonical)}">
+          <option value="">Keep</option>
+          ${CATEGORIES.filter(c => c !== x.category).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select></td></tr>`).join('')}</tbody></table></div>
+      ${byKeyword.length > 30 ? `<p class="field-hint" style="margin-top:9px;">Showing 30 of ${byKeyword.length}.</p>` : ''}</div>`;
+  }
+
+  const nonIT = s.filter(x => x.category === 'Non-IT / Review scope');
+  if (nonIT.length) {
+    const nt = nonIT.reduce((a, x) => a + x.current, 0);
+    html += `<div class="alert alert-warning"><span class="alert-icon">🔍</span><div><strong>${nonIT.length} supplier${nonIT.length === 1 ? '' : 's'} look like non-IT spend</strong> (${fmtMoney(nt)}) — facilities, travel, legal, insurance and similar. If this file was meant to be IT only, that is a scoping problem worth raising before any of these numbers are quoted. They are excluded from savings ranges.</div></div>`;
+  }
 
   if (state.skippedRows > 0) {
     html += `<div class="alert alert-warning"><span class="alert-icon">⚠️</span><div><strong>${state.skippedRows} row${state.skippedRows === 1 ? '' : 's'} skipped</strong> — blank supplier name, or zero/unparseable spend in both periods. Worth a glance if that number looks high.</div></div>`;
@@ -516,14 +637,14 @@ function renderReconcile() {
   if (conflicts.length) {
     html += `<div class="section"><div class="section-head"><h3>Category conflicts</h3><span class="badge">${conflicts.length}</span></div>
       <p class="field-hint" style="margin-bottom:11px;">The file's category disagrees with what the supplier name implies, or one supplier carries several categories across rows. The file value is kept — a GL treatment may be deliberate — but override it below if it's just miscoding.</p>
-      ${conflicts.slice(0, 20).map(x => reviewRow(x, `file says <strong>${esc(x.fileCategories.join(' / ') || '—')}</strong>${x.dictCategory ? `, name implies <strong>${esc(x.dictCategory)}</strong>` : ''}`)).join('')}</div>`;
+      ${conflicts.slice(0, 20).map(x => reviewRow(x, `file says <strong>${esc(x.fileCategories.join(' / ') || '—')}</strong>${x.dictCategory ? `, known vendor implies <strong>${esc(x.dictCategory)}</strong>` : x.nameCategory ? `, name implies <strong>${esc(x.nameCategory)}</strong>` : ''}`)).join('')}</div>`;
   }
 
   if (unclassified.length) {
     const unTotal = unclassified.reduce((a, x) => a + x.current, 0);
     html += `<div class="section"><div class="section-head"><h3>Unclassified suppliers</h3><span class="badge">${unclassified.length}</span><span class="badge grey">${fmtMoney(unTotal)}</span></div>
       <p class="field-hint" style="margin-bottom:11px;">No category in the file and no dictionary match. These are excluded from savings ranges until classified. Largest first — you rarely need to clear the whole tail.</p>
-      ${unclassified.slice(0, 25).map(x => reviewRow(x, 'no category in file, no name match')).join('')}
+      ${unclassified.slice(0, 25).map(x => reviewRow(x, 'no category in file, not a known vendor, and no recognisable word in the name')).join('')}
       ${unclassified.length > 25 ? `<p class="field-hint" style="margin-top:9px;">Showing the 25 largest of ${unclassified.length}.</p>` : ''}</div>`;
   }
 
@@ -862,6 +983,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-reconcile').addEventListener('click', () => { renderReconcile(); goStage(3); });
+  document.getElementById('btn-apply-rules').addEventListener('click', renderReconcile);
   document.getElementById('btn-analyse').addEventListener('click', () => { renderFindings(); goStage(4); });
   document.getElementById('toggle-ranges').addEventListener('change', renderFindings);
   document.getElementById('btn-export').addEventListener('click', exportAnonymised);
