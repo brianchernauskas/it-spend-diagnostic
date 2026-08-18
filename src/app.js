@@ -98,6 +98,41 @@ const VENDORS = [
   ['Softcat', 'Reseller / Channel', ['softcat'], null],
   ['Computacenter', 'Reseller / Channel', ['computacenter'], null],
   ['TD SYNNEX', 'Reseller / Channel', ['td synnex', 'synnex', 'tech data'], null],
+
+  // ── Added from real estate data, Aug 2026 ──────────────────────────────────
+  // Enterprise SaaS
+  ['OneStream', 'Software / SaaS', ['onestream'], null],
+  ['Workiva', 'Software / SaaS', ['workiva'], null],
+  ['Kyriba', 'Software / SaaS', ['kyriba'], null],
+  ['Anaplan', 'Software / SaaS', ['anaplan'], null],
+  ['Asana', 'Software / SaaS', ['asana'], null],
+  ['Autodesk', 'Software / SaaS', ['autodesk'], null],
+  ['Optimizely', 'Software / SaaS', ['optimizely', 'episerver'], null],
+  ['Salsify', 'Software / SaaS', ['salsify'], null],
+  ['Simpplr', 'Software / SaaS', ['simpplr'], null],
+  ['Loftware', 'Software / SaaS', ['loftware', 'nicelabel'], null],
+  ['OpenText', 'Software / SaaS', ['opentext', 'open text', 'micro focus'], null],
+  ['NAVEX', 'Software / SaaS', ['navex'], null],
+  ['AUCOTEC', 'Software / SaaS', ['aucotec'], null],
+
+  // Voice / UCaaS — per-seat renewals that negotiate more like SaaS than like
+  // carrier circuits, but grouped under Telecom to avoid splitting the category.
+  ['RingCentral', 'Telecom', ['ringcentral', 'ring central'], null],
+  ['8x8', 'Telecom', ['8x8', '8 x 8'], null],
+
+  // Carriers / network
+  ['Proximus', 'Telecom', ['proximus'], null],
+  ['Orange Business', 'Telecom', ['orange business', 'orange business services'], null],
+  ['Windstream', 'Telecom', ['windstream', 'winstream'], null],
+
+  // Security
+  ['Ontinue', 'Security', ['ontinue'], null],
+  ['Optiv', 'Security', ['optiv'], null],
+
+  // Channel / resale — the negotiation play differs from a direct vendor deal,
+  // so these are tagged as channel rather than by what they sell.
+  ['PDSVISION', 'Reseller / Channel', ['pdsvision', 'pds vision'], null],
+  ['Coolshop', 'Reseller / Channel', ['coolshop'], null],
 ];
 
 const PLANNERS = {
@@ -304,11 +339,12 @@ function matchVendor(name) {
   for (const [canonical, category, aliases, planner] of VENDORS) {
     for (const a of aliases) {
       const needle = a.trim();
-      // Short aliases must match as whole words to avoid false hits (e.g. "aws", "shi", "bt").
-      const hit = needle.length <= 4
-        ? new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(lower)
-        : lower.includes(needle);
-      if (hit) return { canonical, category, planner };
+      // Whole-word on both sides. Substring matching used to be used for aliases
+      // over 4 chars, which quietly matched unrelated suppliers — "Optiva Media"
+      // resolved to Optiv and "Asanako" to Asana. Vendor names are exact, so
+      // unlike the name-keyword classifier there is no inflection allowance here.
+      const re = new RegExp('\\b' + needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+      if (re.test(lower)) return { canonical, category, planner };
     }
   }
   return null;
