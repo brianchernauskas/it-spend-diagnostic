@@ -143,6 +143,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .pill-src-inferred { background: rgba(59,130,246,.10); color: #1D4ED8; }
 .pill-src-conflict { background: rgba(245,158,11,.16); color: #B45309; }
 .pill-src-none { background: rgba(239,68,68,.10); color: #B91C1C; }
+.pill-src-override { background: var(--accent-soft); color: var(--accent); }
 
 /* ── Toggle ── */
 .toggle-row { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 16px; flex-wrap: wrap; }

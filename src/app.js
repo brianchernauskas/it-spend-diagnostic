@@ -531,6 +531,24 @@ function renderReconcile() {
     html += `<div class="alert alert-success"><span class="alert-icon">✓</span><div>Every supplier resolved to a category with no conflicts. Nothing to review.</div></div>`;
   }
 
+  // Overridden suppliers leave the queues above, so without this section there
+  // would be no way to see what you changed or undo a mis-click.
+  const overridden = s.filter(x => x.categorySource === 'override');
+  if (overridden.length) {
+    html += `<div class="section"><div class="section-head"><h3>Your overrides</h3><span class="badge">${overridden.length}</span></div>
+      <p class="field-hint" style="margin-bottom:11px;">Categories you set by hand. These no longer appear in the queues above, so this is where you check or undo them.</p>
+      ${overridden.map(x => `<div class="review-row">
+        <div>
+          <div class="rr-name">${esc(x.canonical)} <span class="pill pill-src-override">override</span></div>
+          <div class="rr-spend">${fmtMoney(x.current)} · set to <strong>${esc(x.category)}</strong>${x.dictCategory || x.fileCategories.length ? `, automatic would be ${esc(x.fileCategories[0] || x.dictCategory)}` : ''}</div>
+        </div>
+        <select class="cat-override" data-supplier="${esc(x.canonical)}">
+          <option value="">↩ Revert to automatic</option>
+          ${CATEGORIES.filter(c => c !== x.category).map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
+        </select>
+      </div>`).join('')}</div>`;
+  }
+
   document.getElementById('reconcile-output').innerHTML = html;
   document.querySelectorAll('.cat-override').forEach(sel => {
     sel.addEventListener('change', e => {
